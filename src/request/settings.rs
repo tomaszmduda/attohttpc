@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::time::Duration;
 
 use http::HeaderMap;
@@ -26,6 +27,7 @@ pub struct BaseSettings {
     pub default_charset: Option<Charset>,
     #[cfg(feature = "flate2")]
     pub allow_compression: bool,
+    pub bind_to: Option<IpAddr>,
 }
 
 impl Default for BaseSettings {
@@ -47,6 +49,7 @@ impl Default for BaseSettings {
             default_charset: None,
             #[cfg(feature = "flate2")]
             allow_compression: true,
+            bind_to: None,
         }
     }
 }

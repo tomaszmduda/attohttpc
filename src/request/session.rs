@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use http::header::{HeaderValue, IntoHeaderName};
@@ -248,5 +249,14 @@ impl Session {
     /// Adds a root certificate that will be trusted.
     pub fn add_root_certificate(&mut self, cert: Certificate) {
         self.base_settings.root_certificates.0.push(cert);
+    }
+
+    /// Sets the bind address for the session.
+    ///
+    /// # Arguments
+    ///
+    /// * `bind_to` - The address to bind to.
+    pub fn set_bind_address(&mut self, bind_to: Option<IpAddr>) {
+        self.base_settings.bind_to = bind_to;
     }
 }

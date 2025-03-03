@@ -1,27 +1,58 @@
 use std::io;
 use std::iter::{self, FusedIterator};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use socket2::{Domain, Socket, Type};
 use url::Host;
 
 const RACE_DELAY: Duration = Duration::from_millis(200);
 
+/// Attempts to connect to the specified socket address within a given timeout, optionally binding to a local address.
+///
+/// # Arguments
+///
+/// * `addr` - The remote socket address to connect to.
+/// * `timeout` - The duration within which the connection attempt should complete.
+/// * `bind_to` - An optional local socket address to bind to before connecting.
+///
+/// # Returns
+///
+/// * `Ok(TcpStream)` - If the connection is successful.
+/// * `Err(io::Error)` - If the connection fails or times out.
+fn connect_timeout_bind(addr: &SocketAddr, timeout: Duration, bind_to: &Option<IpAddr>) -> io::Result<TcpStream> {
+    let domain = Domain::for_address(*addr);
+    let socket = Socket::new(domain, Type::STREAM, None)?;
+    if let Some(bind_to) = bind_to {
+        let bind_to = SocketAddr::new(*bind_to, 0);
+        socket.bind(&bind_to.into())?;
+    }
+    socket.connect_timeout(&(*addr).into(), timeout)?;
+
+    Ok(socket.into())
+}
+
 /// This function implements a basic form of the happy eyeballs RFC to quickly connect
 /// to a domain which is available in both IPv4 and IPv6. Connection attempts are raced
 /// against each other and the first to connect successfully wins the race.
-pub fn connect(host: &Host<&str>, port: u16, timeout: Duration, deadline: Option<Instant>) -> io::Result<TcpStream> {
+pub fn connect(
+    host: &Host<&str>,
+    port: u16,
+    timeout: Duration,
+    deadline: Option<Instant>,
+    bind_to: &Option<IpAddr>,
+) -> io::Result<TcpStream> {
     let addrs: Vec<_> = match *host {
         Host::Domain(domain) => (domain, port).to_socket_addrs()?.collect(),
-        Host::Ipv4(ip) => return TcpStream::connect_timeout(&(IpAddr::V4(ip), port).into(), timeout),
-        Host::Ipv6(ip) => return TcpStream::connect_timeout(&(IpAddr::V6(ip), port).into(), timeout),
+        Host::Ipv4(ip) => return connect_timeout_bind(&(IpAddr::V4(ip), port).into(), timeout, bind_to),
+        Host::Ipv6(ip) => return connect_timeout_bind(&(IpAddr::V6(ip), port).into(), timeout, bind_to),
     };
 
     if let [addr] = &addrs[..] {
         debug!("DNS returned only one address, using fast path");
-        return TcpStream::connect_timeout(addr, timeout);
+        return connect_timeout_bind(addr, timeout, bind_to);
     }
 
     let ipv4 = addrs.iter().filter(|a| a.is_ipv4());
@@ -58,13 +89,14 @@ pub fn connect(host: &Host<&str>, port: u16, timeout: Duration, deadline: Option
     // connection attempt is successful.
     for &addr in sorted {
         let tx = tx.clone();
+        let bind_to = *bind_to;
 
         thread::spawn(move || {
             debug!("trying to connect to {}", addr);
 
             let res = match deadline.map(|deadline| deadline.checked_duration_since(Instant::now())) {
-                None => TcpStream::connect_timeout(&addr, timeout),
-                Some(Some(timeout1)) => TcpStream::connect_timeout(&addr, timeout.min(timeout1)),
+                None => connect_timeout_bind(&addr, timeout, &bind_to),
+                Some(Some(timeout1)) => connect_timeout_bind(&addr, timeout.min(timeout1), &bind_to),
                 Some(None) => Err(io::ErrorKind::TimedOut.into()),
             };
 
